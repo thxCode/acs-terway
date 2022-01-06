@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -220,8 +221,15 @@ func (m *ENIDevicePlugin) cleanup() error {
 
 	for _, preSock := range preSocks {
 		log.Infof("device plugin file info: %+v", preSock)
-		if m.eniRes.re.Match([]byte(preSock.Name())) && preSock.Mode()&os.ModeSocket != 0 {
-			if err = syscall.Unlink(path.Join(pluginapi.DevicePluginPath, preSock.Name())); err != nil {
+		if m.eniRes.re.Match([]byte(preSock.Name())) {
+			if runtime.GOOS == "windows" {
+				// NB(thxCode): treat the socket file as normal file
+				// and remove them directly.
+				err = os.Remove(path.Join(pluginapi.DevicePluginPath, preSock.Name()))
+			} else {
+				err = syscall.Unlink(path.Join(pluginapi.DevicePluginPath, preSock.Name()))
+			}
+			if err != nil {
 				log.Errorf("error on clean up previous device plugin listens, %+v", err)
 			}
 		}
@@ -231,7 +239,15 @@ func (m *ENIDevicePlugin) cleanup() error {
 
 func (m *ENIDevicePlugin) watchKubeletRestart() {
 	wait.Until(func() {
-		_, err := os.Stat(m.socket)
+		var err error
+		if runtime.GOOS == "windows" {
+			// NB(thxCode): since os.Stat has not worked as expected,
+			// we use os.Lstat instead of os.Stat here,
+			// ref to https://github.com/microsoft/Windows-Containers/issues/97#issuecomment-887713195.
+			_, err = os.Lstat(m.socket)
+		} else {
+			_, err = os.Stat(m.socket)
+		}
 		if err == nil {
 			return
 		}
